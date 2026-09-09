@@ -66,6 +66,17 @@ DIR_X1 = 4
 DIR_Y1 = 8
 
 
+def _label_factor(figure: FigureBase, away_from_origin: bool) -> float:
+    """Points-to-pixels for an axis label, signed by the side the label is on.
+
+    Matplotlib applies `labelpad` away from the axis, so the label's coordinate
+    falls as the pad grows on the bottom and the left, and rises as it grows on
+    the top and the right. Carrying that direction in the factor lets the
+    position and the pad convert into each other with one expression per axis.
+    """
+    return (1.0 if away_from_origin else -1.0) * figure.dpi / 72.0
+
+
 def checkXLabel(target: Artist):
     """checks if the target is the xlabel of an axis"""
     for axes in target.figure.axes:
@@ -146,21 +157,41 @@ class TargetWrapper(object):
             # controls own. An annotation was scalable, so its box grew as it
             # was dragged and its corners did nothing visible.
             self.do_scale = False
+            # An axis label is placed by its labelpad, which matplotlib applies
+            # away from the axis, so which way the label travels depends on the
+            # side it is on: a larger pad puts a bottom x label further below and
+            # a left y label further to the left, and the coordinate falls as the
+            # pad grows, while a top or right label moves the other way and the
+            # coordinate rises. `label_factor` carries that direction as its
+            # sign, so one expression serves all four sides.
+            #
+            # `pad_offset` is where the label would sit at a pad of zero, and the
+            # pad that puts it at a given coordinate follows from it. The offset
+            # was stored with the opposite sign and cached on the artist, so
+            # writing a label back at the position it already had returned the
+            # pad negated -- 4 points became -4 -- and the label jumped to the
+            # other side of the axis. It is recomputed here instead of cached,
+            # because the zero-pad position moves whenever the axes or the tick
+            # labels do.
             if checkXLabel(self.target):
-                self.label_factor = self.figure.dpi / 72.0
-                if getattr(self.target, "pad_offset", None) is None:
-                    self.target.pad_offset = (
-                            self.target.get_position()[1]
-                            - checkXLabel(self.target).xaxis.labelpad * self.label_factor
-                    )
+                axis = checkXLabel(self.target).xaxis
+                self.label_factor = _label_factor(
+                    self.figure, axis.get_label_position() == "top"
+                )
+                self.target.pad_offset = (
+                        self.target.get_position()[1]
+                        - axis.labelpad * self.label_factor
+                )
                 self.label_y = self.target.get_position()[1]
             elif checkYLabel(self.target):
-                self.label_factor = self.figure.dpi / 72.0
-                if getattr(self.target, "pad_offset", None) is None:
-                    self.target.pad_offset = (
-                            self.target.get_position()[0]
-                            - checkYLabel(self.target).yaxis.labelpad * self.label_factor
-                    )
+                axis = checkYLabel(self.target).yaxis
+                self.label_factor = _label_factor(
+                    self.figure, axis.get_label_position() == "right"
+                )
+                self.target.pad_offset = (
+                        self.target.get_position()[0]
+                        - axis.labelpad * self.label_factor
+                )
                 self.label_x = self.target.get_position()[0]
             self.get_transform = self.target.get_transform
             # An annotation carries two points in two different systems: the
@@ -344,7 +375,7 @@ class TargetWrapper(object):
             if checkXLabel(self.target):
                 axes = checkXLabel(self.target)
                 axes.xaxis.labelpad = (
-                        -(pts[0][1] - self.target.pad_offset) / self.label_factor  # ty:ignore[unresolved-attribute]
+                        (pts[0][1] - self.target.pad_offset) / self.label_factor  # ty:ignore[unresolved-attribute]
                 )
                 change_tracker.addChange(
                     axes, ".xaxis.labelpad = %f" % axes.xaxis.labelpad
@@ -355,7 +386,7 @@ class TargetWrapper(object):
             elif checkYLabel(self.target):
                 axes = checkYLabel(self.target)
                 axes.yaxis.labelpad = (
-                        -(pts[0][0] - self.target.pad_offset) / self.label_factor  # ty:ignore[unresolved-attribute]
+                        (pts[0][0] - self.target.pad_offset) / self.label_factor  # ty:ignore[unresolved-attribute]
                 )
                 change_tracker.addChange(
                     axes, ".yaxis.labelpad = %f" % axes.yaxis.labelpad

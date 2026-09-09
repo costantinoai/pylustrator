@@ -29,6 +29,7 @@ else:
     from qtpy import QtCore, QtGui, QtWidgets
 
 import matplotlib as mpl
+from matplotlib.transforms import IdentityTransform
 import numpy as np
 from matplotlib.artist import Artist
 
@@ -160,6 +161,25 @@ class TargetWrapper(object):
                     )
                 self.label_x = self.target.get_position()[0]
             self.get_transform = self.target.get_transform
+            # An annotation carries two points in two different systems: the
+            # anchor in its xycoords, data by default, and the text position in
+            # its textcoords, which for `textcoords="offset points"` is an
+            # offset in points from that anchor. There is no system the two
+            # share, and the offset's own system moves whenever the anchor does,
+            # so a drag that set both from one transform moved the text twice
+            # and then drifted further with every motion event. This target
+            # therefore works in display coordinates, and each point is
+            # converted through the transform that belongs to it.
+            if getattr(self.target, "xy", None) is not None:
+                self.anchor_transform = self.target._get_xy_transform(  # ty:ignore[unresolved-attribute]
+                    None, self.target.xycoords  # ty:ignore[unresolved-attribute]
+                )
+                self.text_transform = self.target.get_transform
+                self.get_transform = IdentityTransform
+                self.anchor_offset_scale = {
+                    "offset points": self.figure.dpi / 72.0,
+                    "offset pixels": 1.0,
+                }.get(self.target.anncoords)  # ty:ignore[unresolved-attribute]
         # the default is to use get_transform
         else:
             self.get_transform = self.target.get_transform
@@ -195,7 +215,23 @@ class TargetWrapper(object):
             elif checkYLabel(self.target):
                 points[0] = _to_point((self.label_x, points[0][1]))
             if getattr(self.target, "xy", None) is not None:
-                points.append(_to_point(self.target.xy))  # ty:ignore[unresolved-attribute]
+                anchor = _to_point(
+                    self.anchor_transform.transform(
+                        self.target.xy  # ty:ignore[unresolved-attribute]
+                    )
+                )
+                if self.anchor_offset_scale is not None:
+                    # The annotation's own transform is rebuilt from the anchor
+                    # when the figure is drawn, so reading the text through it
+                    # after the anchor has moved and before the next draw would
+                    # report the text at its old place, and the next motion
+                    # event would then move it from there. The offset is added
+                    # to the anchor here instead, which is what that transform
+                    # does and is true the moment either changes.
+                    points[0] = anchor + points[0] * self.anchor_offset_scale
+                else:
+                    points[0] = _to_point(self.text_transform().transform(points[0]))
+                points.append(anchor)
             bbox = self.target.get_bbox_patch()
             if bbox:
                 points.append(
@@ -325,6 +361,31 @@ class TargetWrapper(object):
 
                 self.target.set_position(_to_tuple(pts[0]))
                 self.label_x = float(pts[0][0])
+            elif getattr(self.target, "xy", None) is not None:
+                # Both points arrive in display coordinates, so each is written
+                # back through its own transform and the result does not depend
+                # on where the anchor was before. A drag reports the same target
+                # points on every motion event, and setting them twice is
+                # therefore a no-op rather than a second move.
+                text_point, anchor_point = _to_point(pts[0]), _to_point(pts[1])
+                self.target.xy = _to_tuple(  # ty:ignore[invalid-assignment]
+                    self.anchor_transform.inverted().transform(anchor_point)
+                )
+                if self.anchor_offset_scale is not None:
+                    position = (text_point - anchor_point) / self.anchor_offset_scale
+                else:
+                    # Any other text coordinates are absolute, so the text is
+                    # placed through its own transform and the anchor does not
+                    # enter into it.
+                    position = self.text_transform().inverted().transform(text_point)
+                self.target.set_position(_to_tuple(position))
+                # `addNewTextChange` drops every earlier change to this element,
+                # so the anchor is recorded after it rather than before.
+                change_tracker.addNewTextChange(self.target)
+                change_tracker.addChange(
+                    self.target,
+                    ".xy = (%f, %f)" % self.target.xy,  # ty:ignore[unresolved-attribute]
+                )
             else:
                 self.target.set_position(_to_tuple(pts[0]))
                 if isinstance(self.target, Text):
@@ -333,12 +394,6 @@ class TargetWrapper(object):
                     change_tracker.addChange(
                         self.target,
                         ".set_position([%f, %f])" % self.target.get_position(),
-                    )
-                if getattr(self.target, "xy", None) is not None:
-                    self.target.xy = _to_tuple(pts[1])  # ty:ignore[invalid-assignment]
-                    change_tracker.addChange(
-                        self.target,
-                        ".xy = (%f, %f)" % self.target.xy,  # ty:ignore[unresolved-attribute]
                     )
         elif isinstance(self.target, Legend):
             if isinstance(self.target.axes, Axes):

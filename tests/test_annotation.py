@@ -70,6 +70,28 @@ class TestAnnotation(BaseTest):
         self.assertIn(".xy = ", changes)
         plt.close(fig)
 
+    def test_the_selection_sits_on_the_text_and_does_not_scale(self):
+        fig, axes = self._figure()
+        note = [text for text in axes.texts if text.get_text() == "***"][0]
+        fig.figure_dragger.select_element(note)
+        selection, box = fig.selection, note.get_window_extent()
+
+        # A rectangle around every point of an annotation reaches back to its
+        # anchor, so it does not sit on the text and it changes shape as the
+        # text is dragged. And no text scales with its rectangle: the corners
+        # would move the position and the anchor apart without changing the
+        # type size, which the font controls own.
+        self.assertAlmostEqual(selection.width(), box.width, places=3)
+        self.assertAlmostEqual(selection.height(), box.height, places=3)
+        self.assertFalse(selection.do_target_scale())
+
+        self.move_element((25, -18))
+        fig.canvas.draw()
+        moved = note.get_window_extent()
+        self.assertAlmostEqual(fig.selection.width(), moved.width, places=3)
+        self.assertAlmostEqual(fig.selection.height(), moved.height, places=3)
+        plt.close(fig)
+
 
 if __name__ == "__main__":
     unittest.main()

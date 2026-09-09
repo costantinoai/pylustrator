@@ -140,10 +140,12 @@ class TargetWrapper(object):
             cache_property(self.target, "position")
         # texts use get_transform
         elif isinstance(self.target, Text):
-            if getattr(self.target, "xy", None) is not None:
-                self.do_scale = True
-            else:
-                self.do_scale = False
+            # No text scales with its selection: the rectangle carries the
+            # position and, for an annotation, the anchor, and dragging a corner
+            # moves those apart without changing the type size, which the font
+            # controls own. An annotation was scalable, so its box grew as it
+            # was dragged and its corners did nothing visible.
+            self.do_scale = False
             if checkXLabel(self.target):
                 self.label_factor = self.figure.dpi / 72.0
                 if getattr(self.target, "pad_offset", None) is None:
